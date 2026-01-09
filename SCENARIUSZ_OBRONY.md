@@ -3,13 +3,13 @@
 ## Wstęp teoretyczny i cel
 Wprowadzono trzy poziomy priorytetu dla procesów użytkownika (grupy 0, 1, 2), co wymusza kolejność wykonywania: grupa 0 (RR) > grupa 1 (aging) > grupa 2 (SJF). Dla każdej grupy dobrano osobny kwant czasu, a procesy mogą zgłaszać swój priorytet oraz deklarowany czas wykonania przez nowe wywołania systemowe SETGROUP i SETBURST.
 
-## Analiza zmian (krok po kroku)
+## Analiza zmian (krok-po-kroku)
 
 ### `include/minix/callnr.h` (nagłówki wywołań systemowych)
 - **Lokalizacja:** `/usr/include/minix/callnr.h` (w repozytorium: `minix_usr-2/include/minix/callnr.h`).
 - **Co zostało zmienione:** Podniesiono `NCALLS` do 80 i zdefiniowano numery wywołań `SETGROUP` (78) i `SETBURST` (79).
 - **Jak to działa:** Nowe numery są widoczne dla przestrzeni użytkownika i mapowane w tablicach menedżera pamięci.
-- **Dlaczego tak:** Dodanie nowych usług MM wymaga rezerwacji numerów syscalli, aby biblioteka `_syscall` mogła przygotować poprawne wiadomości.
+- **Dlaczego tak:** Dodanie nowych usług MM wymaga rezerwacji numerów wywołań systemowych, aby biblioteka `_syscall` mogła przygotować poprawne wiadomości.
 
 ### `include/minix/com.h` (kody SYSTASK)
 - **Lokalizacja:** `/usr/include/minix/com.h` (`minix_usr-2/include/minix/com.h`).
@@ -79,7 +79,7 @@ Wprowadzono trzy poziomy priorytetu dla procesów użytkownika (grupy 0, 1, 2), 
 ### `tmp/proces.c`
 - **Lokalizacja:** `minix_usr-2/tmp/proces.c` (program testowy w przestrzeni użytkownika).
 - **Co zostało zmienione/dodane:** Narzędzie demonstrujące nowe syscall’e. Udostępnia tryby `rr`, `aging`, `sjf`, `mix`, `onesjf` oraz wrappery `setgroup`/`setburst` korzystające z numerów 78/79.
-- **Jak to działa:** Program forkuje dzieci, ustawia im grupę i (dla SJF) zadeklarowany burst, po czym wypala zadany czas CPU. Standardowe wywołanie `_syscall(MM, SETGROUP/SETBURST, …)` przekazuje parametry do MM, a dalej do SYSTASK.
+- **Jak to działa:** Program forkuje dzieci, ustawia im grupę i (dla SJF) zadeklarowany burst, po czym wykorzystuje zadany czas CPU. Standardowe wywołanie `_syscall(MM, SETGROUP/SETBURST, …)` przekazuje parametry do MM, a dalej do SYSTASK.
 - **Dlaczego tak:** Umożliwia ręczne uruchamianie scenariuszy testowych i obserwację kolejności przełączeń.
 
 ## Przepływ sterowania (flow)
