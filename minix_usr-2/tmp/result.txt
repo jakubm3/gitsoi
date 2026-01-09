@@ -1,0 +1,18 @@
+child pid=86 before setgroup
+child pid=88 before setgroup
+child pid=90 before setgroup
+child pid=86 after setgroup
+child pid=88 after setgroup
+child pid=90 after setgroup
+child pid=86 before setburst burst=90
+child pid=88 before setburst burst=150
+child pid=90 before setburst burst=30
+child pid=90 after setburst
+START pid=90 group=2 burst=30
+END pid=90 group=2 cpu_ticks=300
+child pid=86 after setburst
+START pid=86 group=2 burst=90
+END pid=86 group=2 cpu_ticks=300
+child pid=88 after setburst
+START pid=88 group=2 burst=150
+END pid=88 group=2 cpu_ticks=300
