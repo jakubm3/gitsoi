@@ -5,6 +5,11 @@ Wprowadzono trzy poziomy priorytetu dla procesów użytkownika (grupy 0, 1, 2), 
 
 ## Analiza zmian (krok-po-kroku)
 
+### Architektura – co dodano globalnie
+- **Pola w deskryptorze procesu (`proc.h`):** `group` (0/1/2), `age` (licznik dla aging), `sjf_burst` i `sjf_rem` (deklarowany i pozostający czas SJF). Dzięki temu planista ma komplet danych w jednym miejscu.
+- **Kwanty czasowe (`system.c`):** tablica `quants[3] = {5, 3, 1}`; wykorzystywana w `clock.c` do ustawienia `sched_ticks = SCHED_RATE * quants[group]`.
+- **Nowe syscalle (`callnr.h` + `com.h` + `system.c` + `misc.c`/`proto.h`/`table.c`):** `SETGROUP` i `SETBURST` (numery 78/79, kody SYSTASK 22/23).
+
 ### `include/minix/callnr.h` (nagłówki wywołań systemowych)
 - **Lokalizacja:** `/usr/include/minix/callnr.h` (w repozytorium: `minix_usr-2/include/minix/callnr.h`).
 - **Co zostało zmienione:** Podniesiono `NCALLS` do 80 i zdefiniowano numery wywołań `SETGROUP` (78) i `SETBURST` (79).
@@ -67,6 +72,24 @@ Wprowadzono trzy poziomy priorytetu dla procesów użytkownika (grupy 0, 1, 2), 
 - **Jak to działa:** Jedna kolejka `USER_Q` jest podzielona logicznie na trzy segmenty; wybór następnego procesu respektuje kolejność grup oraz wewnętrzną politykę (RR/aging/SJF).
 - **Dlaczego tak:** Pozwala to zachować prostotę jednej kolejki użytkownika przy jednoczesnym obsłużeniu trzech różnych strategii szeregowania.
 
+#### Szczegóły kolejkowania użytkownika
+1. **Wstawianie (`user_insert_tail`)**  
+   - Gdy kolejka jest pusta – proces staje się head i tail.  
+   - Jeśli w kolejce są procesy tej samej grupy, nowy jest dołączany tuż za ostatnim z tej grupy (utrzymanie ciągłych segmentów).  
+   - Jeśli grupa=0: trafia na sam początek kolejki.  
+   - Jeśli grupa=1: jest wstawiany za segmentem grupy 0, ale przed segmentem grupy 2.  
+   - Grupa=2: domyślnie na koniec całej kolejki.
+2. **Wybór (`user_pick_next`)**  
+   - Jeśli head ma grupę 0: zwraca head (RR wewnątrz segmentu utrzymuje się dzięki `sched()`, które rotuje).  
+   - W grupie 1: przegląd całej kolejki, wybór procesu z największym `age`, jego przesunięcie na head (reset `age` do 0).  
+   - W grupie 2: przegląd kolejki, wybór procesu z najmniejszym `sjf_rem`, przesunięcie na head.  
+3. **Rotacja po kwancie (`sched`)**  
+   - Sprawdza, czy bieżący proces to head `USER_Q`; jeśli tak, zdejmuje go z head, przestawia na koniec swojego segmentu (przez ponowne `user_insert_tail`) i ponownie wybiera proces.  
+   - Dla grupy 1 resetuje `age` procesu, który oddał kwant.  
+4. **Konsekwencja:** Kolejność grup jest zachowana (0 > 1 > 2), a wewnątrz grup zaimplementowano odpowiednio RR, starzenie przez największe `age` i SJF przez najmniejsze `sjf_rem`.
+
+> Uwaga: `age` jest zerowane przy wejściu do kolejki i po użyciu kwantu. Brak mechanizmu zwiększania `age` w trakcie oczekiwania powoduje, że w obecnym kodzie grupa 1 zachowuje się jak FIFO (pierwszy proces tej grupy w kolejce będzie wybierany). Prawdziwe starzenie wymagałoby inkrementacji `age` – najprościej w obsłudze zegara w `clock.c` (np. podczas dekrementacji `sched_ticks` przejrzeć `USER_Q` i zwiększać `age` procesów z grupy 1).
+
 ### `src/kernel/clock.c` i `src/kernel/proc.c` – długość kwantu i rotacja
 - **Interakcja:** Długość kwantu (`sched_ticks`) jest mnożona przez `quants[group]`, a po jego zużyciu `sched()` przestawia proces na odpowiednie miejsce, co łącznie daje hierarchię priorytetów.
 
@@ -79,7 +102,12 @@ Wprowadzono trzy poziomy priorytetu dla procesów użytkownika (grupy 0, 1, 2), 
 ### `tmp/proces.c`
 - **Lokalizacja:** `minix_usr-2/tmp/proces.c` (program testowy w przestrzeni użytkownika).
 - **Co zostało zmienione/dodane:** Narzędzie demonstrujące nowe syscall’e. Udostępnia tryby `rr`, `aging`, `sjf`, `mix`, `onesjf` oraz wrappery `setgroup`/`setburst` korzystające z numerów 78/79.
-- **Jak to działa:** Program forkuje dzieci, ustawia im grupę i (dla SJF) zadeklarowany burst, po czym wykorzystuje zadany czas CPU. Standardowe wywołanie `_syscall(MM, SETGROUP/SETBURST, …)` przekazuje parametry do MM, a dalej do SYSTASK.
+- **Jak to działa (ścieżka danych):**  
+  1. W `setgroup`/`setburst` budowana jest wiadomość m1_i1=PID, m1_i2=group/burst; `_syscall(MM, SETGROUP/SETBURST, &m)` kieruje ją do MM.  
+  2. MM woła `_taskcall(SYSTASK, SYS_SETGROUP/SYS_SETBURST, …)`.  
+  3. SYSTASK aktualizuje pola `group`/`sjf_*` procesu.  
+  4. Dziecko w `child_worker` ewentualnie ustawia grupę/burst, drukuje log, a następnie wykonuje `burn_ticks(runtime)` (aktywne zużywanie CPU do zadanej liczby ticków) lub pętlę nieskończoną.  
+  5. `delay_ticks` używa `times()` do odczekania między startami procesów aging, aby zasymulować starzenie.
 - **Dlaczego tak:** Umożliwia ręczne uruchamianie scenariuszy testowych i obserwację kolejności przełączeń.
 
 ## Przepływ sterowania (flow)
