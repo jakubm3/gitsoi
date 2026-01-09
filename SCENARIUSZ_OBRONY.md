@@ -5,10 +5,23 @@ Wprowadzono trzy poziomy priorytetu dla procesów użytkownika (grupy 0, 1, 2), 
 
 ## Analiza zmian (krok-po-kroku)
 
-### Architektura – co dodano globalnie
-- **Pola w deskryptorze procesu (`proc.h`):** `group` (0/1/2), `age` (licznik dla aging), `sjf_burst` i `sjf_rem` (deklarowany i pozostający czas SJF). Dzięki temu planista ma komplet danych w jednym miejscu.
-- **Kwanty czasowe (`system.c`):** tablica `quants[3] = {5, 3, 1}`; wykorzystywana w `clock.c` do ustawienia `sched_ticks = SCHED_RATE * quants[group]`.
-- **Nowe syscalle (`callnr.h` + `com.h` + `system.c` + `misc.c`/`proto.h`/`table.c`):** `SETGROUP` i `SETBURST` (numery 78/79, kody SYSTASK 22/23).
+### Architektura – co dodano globalnie (w prostych słowach)
+- **Dodatkowe pola procesu (`proc.h`):** zapamiętujemy grupę (`group`), licznik starzenia (`age`) i czasy SJF (`sjf_burst`, `sjf_rem`). Planista ma te dane „pod ręką”.
+- **Różne kwanty dla grup (`system.c`):** tablica `quants[3] = {5, 3, 1}` – grupa 0 dostaje najdłuższy kwant, grupa 2 najkrótszy.
+- **Nowe wywołania systemowe:** `SETGROUP` i `SETBURST` (numery 78/79). MM przekazuje je do SYSTASK, który zmienia pola procesu w jądrze.
+
+Przykład kodu (`proc.h`):
+```c
+int group;           /* 0=RR, 1=Aging, 2=SJF */
+unsigned long age;   /* licznik dla aging */
+long sjf_burst;      /* zadeklarowany czas SJF */
+long sjf_rem;        /* pozostały czas SJF */
+```
+
+Przykład kodu (`system.c` – kwanty):
+```c
+unsigned short quants[3] = {5, 3, 1}; /* mnożone przez SCHED_RATE */
+```
 
 ### `include/minix/callnr.h` (nagłówki wywołań systemowych)
 - **Lokalizacja:** `/usr/include/minix/callnr.h` (w repozytorium: `minix_usr-2/include/minix/callnr.h`).
@@ -41,6 +54,24 @@ Wprowadzono trzy poziomy priorytetu dla procesów użytkownika (grupy 0, 1, 2), 
 - **Jak to działa:** SYSTASK po otrzymaniu komunikatu aktualizuje deskryptor procesu; dla SJF przechowywany jest przewidywany czas (`sjf_rem`) wykorzystywany przy wyborze procesu.
 - **Dlaczego tak:** Tylko kod jądra może modyfikować kolejkę gotowych procesów i atrybuty wpływające na planistę.
 
+Fragment `do_setgroup` (proste ustawienie grupy):
+```c
+if (m_ptr->m1_i2 < 0 || m_ptr->m1_i2 > 2) return EFAULT;
+rp = findProcDescriptor(m_ptr->m1_i1);
+if (rp == NULL) return EFAULT;
+rp->group = m_ptr->m1_i2;
+return OK;
+```
+
+Fragment `do_setburst` (deklaracja czasu SJF):
+```c
+rp = findProcDescriptor(pid);
+if (rp == NULL) return ESRCH;
+rp->sjf_burst = b;
+rp->sjf_rem   = b;
+return OK;
+```
+
 ### `src/kernel/proc.h`
 - **Lokalizacja:** `/usr/src/kernel/proc.h` (`minix_usr-2/src/kernel/proc.h`).
 - **Co zostało zmienione:** Struktura `proc` otrzymała pola `group`, `age`, `sjf_burst`, `sjf_rem`; zadeklarowano `extern unsigned short quants[3];`.
@@ -62,6 +93,17 @@ Wprowadzono trzy poziomy priorytetu dla procesów użytkownika (grupy 0, 1, 2), 
 - **Jak to działa:** Po wyczerpaniu kwantu zegar nadaje nową wartość proporcjonalną do klasy priorytetu (grupa 0 dostaje najdłuższy czas).
 - **Dlaczego tak:** Różne polityki potrzebują różnych długości kwantu, aby zachować hierarchię (np. SJF krótszy kwant).
 
+Fragment:
+```c
+if (--sched_ticks == 0) {
+    if (rdy_head[USER_Q] != NIL_PROC)
+        sched_ticks = SCHED_RATE * quants[rdy_head[USER_Q]->group];
+    else
+        sched_ticks = SCHED_RATE;
+    prev_ptr = bill_ptr;
+}
+```
+
 ### `src/kernel/proc.c`
 - **Lokalizacja:** `/usr/src/kernel/proc.c` (`minix_usr-2/src/kernel/proc.c`).
 - **Co zostało zmienione:**  
@@ -72,7 +114,7 @@ Wprowadzono trzy poziomy priorytetu dla procesów użytkownika (grupy 0, 1, 2), 
 - **Jak to działa:** Jedna kolejka `USER_Q` jest podzielona logicznie na trzy segmenty; wybór następnego procesu respektuje kolejność grup oraz wewnętrzną politykę (RR/aging/SJF).
 - **Dlaczego tak:** Pozwala to zachować prostotę jednej kolejki użytkownika przy jednoczesnym obsłużeniu trzech różnych strategii szeregowania.
 
-#### Szczegóły kolejkowania użytkownika
+#### Szczegóły kolejkowania użytkownika (krok po kroku)
 1. **Wstawianie (`user_insert_tail`)**  
    - Gdy kolejka jest pusta – proces staje się head i tail.  
    - Jeśli w kolejce są procesy tej samej grupy, nowy jest dołączany tuż za ostatnim z tej grupy (utrzymanie ciągłych segmentów).  
@@ -87,6 +129,18 @@ Wprowadzono trzy poziomy priorytetu dla procesów użytkownika (grupy 0, 1, 2), 
    - Sprawdza, czy bieżący proces to head `USER_Q`; jeśli tak, zdejmuje go z head, przestawia na koniec swojego segmentu (przez ponowne `user_insert_tail`) i ponownie wybiera proces.  
    - Dla grupy 1 resetuje `age` procesu, który oddał kwant.  
 4. **Konsekwencja:** Kolejność grup jest zachowana (0 > 1 > 2), a wewnątrz grup zaimplementowano odpowiednio RR, starzenie przez największe `age` i SJF przez najmniejsze `sjf_rem`.
+
+Przykład kodu (szukanie najstarszego w grupie 1):
+```c
+best = NIL_PROC; best_prev = NIL_PROC; best_age = 0;
+prev = NIL_PROC; p = rdy_head[USER_Q];
+while (p != NIL_PROC) {
+    if (p->group == 1 && (best == NIL_PROC || p->age > best_age)) {
+        best = p; best_prev = prev; best_age = p->age;
+    }
+    prev = p; p = p->p_nextready;
+}
+```
 
 > Uwaga: `age` jest zerowane przy wejściu do kolejki i po użyciu kwantu. Brak mechanizmu zwiększania `age` w trakcie oczekiwania powoduje, że w obecnym kodzie grupa 1 zachowuje się jak FIFO (pierwszy proces tej grupy w kolejce będzie wybierany). Prawdziwe starzenie wymagałoby inkrementacji `age` – najprościej w obsłudze zegara w `clock.c` (np. podczas dekrementacji `sched_ticks` przejrzeć `USER_Q` i zwiększać `age` procesów z grupy 1).
 
