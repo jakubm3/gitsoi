@@ -164,6 +164,19 @@ while (p != NIL_PROC) {
   5. `delay_ticks` używa `times()` do odczekania między startami procesów aging, aby zasymulować starzenie.
 - **Dlaczego tak:** Umożliwia ręczne uruchamianie scenariuszy testowych i obserwację kolejności przełączeń.
 
+#### Jak uruchomić testy i co znaczą argumenty
+- `rr N [sekundy]` – uruchamia N procesów w grupie 0 (round-robin). Domyślnie 5 sekund runtime, można podać własny czas w sekundach jako trzeci argument.
+- `aging N [sekundy] [opóźnienie_ms]` – uruchamia N procesów w grupie 1. Każdy ma runtime w sekundach (domyślnie 5), między startami wprowadzane jest opóźnienie w milisekundach (domyślnie 300 ms), co pozwala zobaczyć starzenie.
+- `sjf [s=sekundy] B1 B2 ...` – uruchamia procesy grupy 2 (SJF). `s=` ustawia runtime w sekundach (domyślnie 5). Kolejne argumenty to zadeklarowane bursty (np. 30 90 150). Kolejność wykonania powinna zaczynać się od najmniejszego burstu.
+- `mix [sekundy]` – uruchamia mieszankę: jeden RR, jeden aging oraz trzy SJF z burstami 30/90/150. Parametr w sekundach ustawia runtime (domyślnie 5).
+- `onesjf` – ustawia bieżący proces do grupy 2 i deklaruje burst=30; szybki test konfiguracji.
+
+Przykłady (do uruchomienia w MINIX po skompilowaniu `proces`):
+- `./proces rr 3 5`
+- `./proces aging 3 5 300`
+- `./proces sjf s=5 30 90 150`
+- `./proces mix 5`
+
 ## Przepływ sterowania (flow)
 1. **Użytkownik** wywołuje `setgroup`/`setburst` (np. z `proces.c`), co przez `_syscall` generuje przerwanie do jądra i wiadomość do **MM** z numerem 78/79.
 2. **MM** (tablica `call_vec`) deleguje do `do_setgroup`/`do_setburst`, które budują komunikat m1 i wysyłają go `_taskcall` do **SYSTASK** z kodem `SYS_SETGROUP` lub `SYS_SETBURST`.
